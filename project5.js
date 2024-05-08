@@ -5,94 +5,170 @@
 function GetModelViewMatrix( translationX, translationY, translationZ, rotationX, rotationY )
 {
 	// [TO-DO] Modify the code below to form the transformation matrix.
-	var trans = [
-		1, 0, 0, 0,
-		0, 1, 0, 0,
-		0, 0, 1, 0,
-		translationX, translationY, translationZ, 1
+	var cosX = Math.cos(rotationX);
+	var sinX = Math.sin(rotationX);
+	var cosY = Math.cos(rotationY);
+	var sinY = Math.sin(rotationY);
+	
+ 	var mvp = [
+		cosY,        	0, 				sinY, 			0,
+		sinX*sinY,   	cosX, 			-sinX*cosY, 	0,
+		-cosX*sinY,  	sinX, 			cosX*cosY,  	0,
+		translationX,	translationY, 	translationZ, 	1
 	];
-	var mv = trans;
-	return mv;
+	
+	return mvp;
 }
 
 
 // [TO-DO] Complete the implementation of the following class.
 
-class MeshDrawer
-{
-	// The constructor is a good place for taking care of the necessary initializations.
-	constructor()
-	{
-		// [TO-DO] initializations
-	}
-	
-	// This method is called every time the user opens an OBJ file.
-	// The arguments of this function is an array of 3D vertex positions,
-	// an array of 2D texture coordinates, and an array of vertex normals.
-	// Every item in these arrays is a floating point value, representing one
-	// coordinate of the vertex position or texture coordinate.
-	// Every three consecutive elements in the vertPos array forms one vertex
-	// position and every three consecutive vertex positions form a triangle.
-	// Similarly, every two consecutive elements in the texCoords array
-	// form the texture coordinate of a vertex and every three consecutive 
-	// elements in the normals array form a vertex normal.
-	// Note that this method can be called multiple times.
-	setMesh( vertPos, texCoords, normals )
-	{
-		// [TO-DO] Update the contents of the vertex buffer objects.
-		this.numTriangles = vertPos.length / 3;
-	}
-	
-	// This method is called when the user changes the state of the
-	// "Swap Y-Z Axes" checkbox. 
-	// The argument is a boolean that indicates if the checkbox is checked.
-	swapYZ( swap )
-	{
-		// [TO-DO] Set the uniform parameter(s) of the vertex shader
-	}
-	
+class MeshDrawer {
+    constructor() {
+        const MeshVS = `
+            attribute vec3 pos;
+            attribute vec2 texCoord;
+            attribute vec3 normal;
+            uniform mat4 mvp;
+            uniform mat4 mv;
+            uniform mat3 normalMatrix;
+            uniform int swap;
+            uniform vec3 lightDir;
+            uniform float shininess;
+            varying vec2 vTexCoord;
+            varying vec3 vNormal;
+            varying vec3 cameraSpacePos;
+
+            void main() {
+                vec3 position = pos;
+                if (swap == 1) {
+                    position = vec3(pos.x, pos.z, pos.y);
+                }
+                gl_Position = mvp * vec4(position, 1.0);
+                vTexCoord = texCoord;
+
+                vNormal = normalize(normalMatrix * normal);
+                cameraSpacePos = (mv * vec4(pos, 1.0)).xyz;
+            }
+        `;
+
+        const MeshFS = `
+            precision mediump float;
+            uniform sampler2D tex;
+            uniform int showTexture;
+            uniform vec3 lightDir;
+            uniform float shininess;
+            varying vec2 vTexCoord;
+            varying vec3 vNormal;
+            varying vec3 cameraSpacePos;
+
+            void main() {
+                vec3 N = normalize(vNormal);
+                vec3 L = normalize(lightDir);
+                vec3 V = normalize(-cameraSpacePos);
+
+                vec3 H = normalize(L + V);
+                float intensity = max(dot(N, L), 0.0);
+                float specular = pow(max(dot(N, H), 0.0), shininess);
+
+                vec4 color;
+
+                if (showTexture == 1) {
+                    color = texture2D(tex, vTexCoord);
+                } else {
+                    color = vec4(1.0, 1.0, 1.0, 1.0); // White color
+                }
+
+                gl_FragColor = vec4(color.rgb * intensity + vec3(specular), color.a);
+            }
+        `;
+
+        this.prog = InitShaderProgram(MeshVS, MeshFS);
+        this.mvp = gl.getUniformLocation(this.prog, 'mvp');
+        this.mv = gl.getUniformLocation(this.prog, 'mv');
+        this.normalMatrix = gl.getUniformLocation(this.prog, 'normalMatrix');
+        this.vertPos = gl.getAttribLocation(this.prog, 'pos');
+        this.vertTexCoord = gl.getAttribLocation(this.prog, 'texCoord');
+        this.vertNormal = gl.getAttribLocation(this.prog, 'normal');
+        this.showTextureUniform = gl.getUniformLocation(this.prog, 'showTexture');
+        this.swapCoord = gl.getUniformLocation(this.prog, 'swap');
+        this.lightDir = gl.getUniformLocation(this.prog, 'lightDir');
+        this.shininessUniform = gl.getUniformLocation(this.prog, 'shininess');
+        this.showText = true;
+
+        this.vertbuffer = gl.createBuffer();
+        this.texbuffer = gl.createBuffer();
+        this.normalsbuffer = gl.createBuffer();
+        this.texture = gl.createTexture();
+    }
+
+    setMesh(vertPos, texCoords, normals) {
+        this.numTriangles = vertPos.length / 3;
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.vertbuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(vertPos), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.texbuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(texCoords), gl.STATIC_DRAW);
+
+        gl.bindBuffer(gl.ARRAY_BUFFER, this.normalsbuffer);
+        gl.bufferData(gl.ARRAY_BUFFER, new Float32Array(normals), gl.STATIC_DRAW);
+    }
+
+    swapYZ(swap) {
+        gl.useProgram(this.prog);
+        gl.uniform1i(this.swapCoord, swap);
+    }
+
 	// This method is called to draw the triangular mesh.
 	// The arguments are the model-view-projection transformation matrixMVP,
 	// the model-view transformation matrixMV, the same matrix returned
 	// by the GetModelViewProjection function above, and the normal
 	// transformation matrix, which is the inverse-transpose of matrixMV.
-	draw( matrixMVP, matrixMV, matrixNormal )
-	{
-		// [TO-DO] Complete the WebGL initializations before drawing
+	draw(matrixMVP, matrixMV, matrixNormal) {
+		gl.useProgram(this.prog);
 
-		gl.drawArrays( gl.TRIANGLES, 0, this.numTriangles );
-	}
-	
-	// This method is called to set the texture of the mesh.
-	// The argument is an HTML IMG element containing the texture data.
-	setTexture( img )
-	{
-		// [TO-DO] Bind the texture
+		gl.uniformMatrix4fv(this.mvp, false, matrixMVP);
+		gl.uniformMatrix4fv(this.mv, false, matrixMV);
+		gl.uniformMatrix3fv(this.normalMatrix, false, matrixNormal);
 
-		// You can set the texture image data using the following command.
-		gl.texImage2D( gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, img );
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.vertbuffer);
+		gl.enableVertexAttribArray(this.vertPos);
+		gl.vertexAttribPointer(this.vertPos, 3, gl.FLOAT, false, 0, 0);
 
-		// [TO-DO] Now that we have a texture, it might be a good idea to set
-		// some uniform parameter(s) of the fragment shader, so that it uses the texture.
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.texbuffer);
+		gl.enableVertexAttribArray(this.vertTexCoord);
+		gl.vertexAttribPointer(this.vertTexCoord, 2, gl.FLOAT, false, 0, 0);
+
+		gl.bindBuffer(gl.ARRAY_BUFFER, this.normalsbuffer);
+		gl.enableVertexAttribArray(this.vertNormal);
+		gl.vertexAttribPointer(this.vertNormal, 3, gl.FLOAT, false, 0, 0);
+
+		gl.uniform1i(this.showTextureUniform, this.showText ? 1 : 0);
+
+		gl.drawArrays(gl.TRIANGLES, 0, this.numTriangles);
 	}
-	
-	// This method is called when the user changes the state of the
-	// "Show Texture" checkbox. 
-	// The argument is a boolean that indicates if the checkbox is checked.
-	showTexture( show )
-	{
-		// [TO-DO] set the uniform parameter(s) of the fragment shader to specify if it should use the texture.
-	}
-	
+
+
+    setTexture(img) {
+        gl.bindTexture(gl.TEXTURE_2D, this.texture);
+        gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, img);
+        gl.generateMipmap(gl.TEXTURE_2D);
+    }
+
+    showTexture(show) {
+        this.showText = show;
+    }
 	// This method is called to set the incoming light direction
-	setLightDir( x, y, z )
-	{
-		// [TO-DO] set the uniform parameter(s) of the fragment shader to specify the light direction.
+	setLightDir(x, y, z) {
+		gl.useProgram(this.prog);
+		gl.uniform3f(this.lightDir, x, y, z);
 	}
-	
+
 	// This method is called to set the shininess of the material
-	setShininess( shininess )
-	{
-		// [TO-DO] set the uniform parameter(s) of the fragment shader to specify the shininess.
+	setShininess(shininess) {
+		gl.useProgram(this.prog);
+		gl.uniform1f(this.shininessUniform, shininess);
 	}
+
 }
